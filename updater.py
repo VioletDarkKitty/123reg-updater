@@ -1,3 +1,4 @@
+#!/usr/bin/python
 import mechanize
 import json
 import ConfigParser
@@ -5,6 +6,8 @@ import re
 
 from time import sleep, ctime
 from urllib import urlencode, urlopen
+from socket import error as SocketError
+import errno
 
 def findRowFormByAction(formlist, action):
     form = 0
@@ -41,12 +44,17 @@ def findSubdomain(subdomain, dnsrecords):
         if (record["host"] == subdomain) and (record['type'] == 'A'):
             return record
             
-def getExternalIP():
+def getExternalIP(last):
     "http://checkip.dyndns.org/"
-    site = urlopen("http://checkip.dyndns.org/").read()
-    grab = re.findall('\d{2,3}.\d{2,3}.\d{2,3}.\d{2,3}', site)
-    address = grab[0]
-    return address
+    try:
+        site = urlopen("http://checkip.dyndns.org/").read()
+        grab = re.findall('\d{2,3}.\d{2,3}.\d{2,3}.\d{2,3}', site)
+        address = grab[0]
+        return address
+    except SocketError as e:
+        if e.errno != errno.ECONNRESET:
+            raise
+        return last
             
 def updateDnsRecords(username, password, domain, hosts, ipaddr):
     # Validate IP
@@ -72,9 +80,10 @@ def updateDnsRecords(username, password, domain, hosts, ipaddr):
     # Select DNS
     dnsrecords = jsondata['json']['dns']['records']
     
-    #printDnsEntries(dnsrecords)
+    printDnsEntries(dnsrecords)
     
     for s in hosts:
+        printMessage('Looking for host "'+s+'"')
         record = findSubdomain(s, dnsrecords)
         if record is not None:
             # Valid record... Submit update
@@ -97,6 +106,10 @@ def updateDnsRecords(username, password, domain, hosts, ipaddr):
     br.close()
     
 def printMessage(message):
+    LOG_PATH = '/var/log/123.log'
+    with open(LOG_PATH, "a") as myfile:
+        myfile.write('[{0}] {1}\n'.format(ctime(), message))
+	myfile.close()
     print('[{0}] {1}'.format(ctime(), message))
     
 
@@ -111,13 +124,14 @@ if __name__ == '__main__':
     password = config.get('global', 'password')
     domain = config.get('global', 'domain')
     subdoms = config.get('global', 'subdomains').split(',')
+    print(subdoms)
     interval = config.getint('global', 'interval_hours')*3600
     
     last_ip = config.get('cache', 'lastip')
 
     while True:
         # Check lastip to current
-        external_ip = getExternalIP()
+        external_ip = getExternalIP(last_ip)
         if external_ip != last_ip:
             printMessage('New IP address! Updating...')
             updateDnsRecords(username, password, domain, subdoms, external_ip)
